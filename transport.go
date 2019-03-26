@@ -4,7 +4,8 @@ package throttle
 import (
 	"context"
 	"net/http"
-	"sync"
+
+	"golang.org/x/sync/errgroup"
 )
 
 // RateLimiter interface compatible with golang.org/x/time/rate.
@@ -45,19 +46,22 @@ type MultiLimiter struct {
 }
 
 // Wait invoke the Wait method of all Limiters concurrently.
-func (l *MultiLimiter) Wait(ctx context.Context) (err error) {
-	wg := sync.WaitGroup{}
-	wg.Add(len(l.limiters))
+func (l *MultiLimiter) Wait(ctx context.Context) error {
+	wg := errgroup.Group{}
+	ctx, cancelFn := context.WithCancel(ctx)
+	defer cancelFn()
 	for _, l := range l.limiters {
-		go func(l RateLimiter) {
-			if wErr := l.Wait(ctx); wErr != nil {
-				err = wErr
+		wg.Go(func(ctx context.Context, l RateLimiter) func() error {
+			return func() error {
+				if err := l.Wait(ctx); err != nil {
+					cancelFn()
+					return err
+				}
+				return nil
 			}
-			wg.Done()
-		}(l)
+		}(ctx, l))
 	}
-	wg.Wait()
-	return
+	return wg.Wait()
 }
 
 // MultiLimiters creates a MultiLimiter from limiters.

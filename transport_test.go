@@ -12,13 +12,13 @@ import (
 )
 
 func TestTransport(t *testing.T) {
-	l := rate.NewLimiter(3, 3)
+	l := rate.NewLimiter(rate.Every(time.Millisecond*10), 3)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !l.Allow() {
 			w.WriteHeader(http.StatusTooManyRequests)
 		}
 	}))
-	client := &http.Client{Transport: &throttle.Transport{Limiter: rate.NewLimiter(2, 2)}}
+	client := &http.Client{Transport: &throttle.Transport{Limiter: rate.NewLimiter(rate.Every(time.Millisecond*10), 2)}}
 	assertStatusFn := func(expected int) {
 		resp, err := client.Get(srv.URL)
 		if err != nil {
@@ -36,8 +36,8 @@ func TestTransport(t *testing.T) {
 
 func TestMultiLimiter(t *testing.T) {
 	l := throttle.MultiLimiters(
-		throttle.NewQuota(time.Second*2, 101),
-		rate.NewLimiter(rate.Every(time.Second/100), 1),
+		throttle.NewQuota(time.Second, 101),
+		rate.NewLimiter(rate.Every(time.Millisecond), 1),
 	)
 	start := time.Now()
 	for i := 0; i < 101; i++ {
@@ -45,11 +45,29 @@ func TestMultiLimiter(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if elapsed := time.Since(start); elapsed < time.Second {
-		t.Fatalf("100 wait took %v", elapsed)
+	if elapsed := time.Since(start); elapsed < time.Millisecond*100 {
+		t.Fatalf("101 wait took %v", elapsed)
 	}
 	if err := l.Wait(context.Background()); err != throttle.ErrQuotaExceeded {
 		t.Fatal(err)
+	}
+}
+
+// Wait won't block if a Quota is reached.
+func TestMultiLimiterQuota(t *testing.T) {
+	l := throttle.MultiLimiters(
+		rate.NewLimiter(1, 1),
+		throttle.NewQuota(time.Second, 1),
+	)
+	start := time.Now()
+	if err := l.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Wait(context.Background()); err != throttle.ErrQuotaExceeded {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("100 wait took %v", elapsed)
 	}
 }
 
